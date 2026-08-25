@@ -1,0 +1,7 @@
+# plugin-installstep
+
+The `plugin-installstep` plugin candy of the [opencharly/charly](https://github.com/opencharly/charly)
+candy library, as a standalone repo (the candy de-submodule cutover, plugin
+kind). The Go module lives at `candy/plugin-installstep/` with module path
+`github.com/opencharly/plugin-installstep/candy/plugin-installstep`; the charly resolver fetches this repo at the pinned tag and
+the compiled-in wiring imports the module at that path.
