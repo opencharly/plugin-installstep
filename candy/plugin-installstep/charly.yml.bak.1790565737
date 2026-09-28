@@ -1,5 +1,7 @@
+version: 2026.232.0520
 plugin-installstep:
     candy:
+        version: 2026.203.0900
         description: |-
             Compiled-in DUAL-PLACEMENT charly class:step plugin serving the BUILD-context OpEmit
             leg for the compiler-emitted builtin InstallStep kinds. Two sub-categories: the PURE
