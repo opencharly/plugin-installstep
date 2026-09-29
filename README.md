@@ -1,11 +1,13 @@
 # plugin-installstep
 
 The dual-placement `class:step` plugin for [opencharly/charly](https://github.com/opencharly/charly) —
-it serves the build-context `OpEmit` leg (and the deploy-context `OpExecute` leg)
-for the compiler-emitted builtin `InstallStep` kinds.
+it serves the compiler-emitted builtin `InstallStep` kinds on BOTH legs:
+the build-context `OpEmit` leg (the pod-overlay Containerfile fragment) and the
+deploy-context `OpExecute` leg (the host-engine step body).
 
-Every `InstallStep` kind is plugin-served. This candy owns twelve of them; the
-`ExternalPlugin` kind dispatches through its own `class:step` plugin.
+Every `InstallStep` kind is plugin-served. This candy serves the builtin kinds
+plus `oci-dispatch` (the full core dispatch wrapper); the `ExternalPlugin` kind
+dispatches through its own `class:step` plugin.
 
 ## What it provides
 
@@ -20,8 +22,9 @@ Every `InstallStep` kind is plugin-served. This candy owns twelve of them; the
 ## The two legs
 
 - **PURE kinds** render their fragment by string formatting from the
-  compiler-produced `spec.InstallStepView`. `apk-install` and `reboot` are the
-  no-op-emit members (an image build installs no apk / reboots nothing).
+  compiler-produced `spec.InstallStepView`. `apk-install`, `reboot`, and
+  `extract` are the no-op-emit members (an image build installs no apk / reboots
+  nothing; `extract` is deploy-only).
 - **HOST-COUPLED kinds** (`system-packages`, `builder`, `local-pkg-install`,
   `op`) render directly against the resolved-project envelope — fetched ONCE per
   project dir via `InvokeProvider("build","project")` and cached.
@@ -29,9 +32,12 @@ Every `InstallStep` kind is plugin-served. This candy owns twelve of them; the
   renders a pod-overlay fragment and dispatches to it via the generic
   reverse-channel `DescribeProvider` + `InvokeProvider` legs.
 
-The DEPLOY leg for all these kinds stays in `sdk/kit.WalkPlans` (rendered over
-the executor reverse channel); this plugin serves `OpEmit` (the build-emit the
-host's `deploykit.OCITarget` splices).
+On the **deploy** leg, this plugin's `OpExecute` serves the four host-engine
+kinds whose bodies used to run host-side — `builder`, `local-pkg-install`,
+`system-packages`, and `extract` — over the wire broker. The
+plugin-renderable deploy kinds (`file`, `shell-hook`, `shell-snippet`,
+`service-*`, `repo-change`) still run via `sdk/kit.WalkPlans`, never this
+plugin.
 
 ## How to use it
 
