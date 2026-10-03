@@ -274,6 +274,14 @@ func execDeployStep(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeReply
 		}
 		reverseOps = st.Reverse()
 	case *spec.SystemPackagesStep:
+		// Probe BEFORE the install: the teardown must record the packages this deploy actually
+		// INSTALLED, not the ones it declared (charly#771). The venue's already-present set is a
+		// property of the venue BEFORE the install runs, so the probe goes first and the recorded
+		// delta is what the deploy really added. A probe that cannot answer leaves Installed nil,
+		// which keeps the prior declared-list behaviour rather than silently recording no removal.
+		if stdout, ok := probePresentPackages(ctx, deps, st); ok {
+			st.Installed = systemPackagesTeardownDelta(st.Packages, stdout)
+		}
 		// The format's phase.install.host template lives in the resolved DistroConfig the broker
 		// threads (deps.DistroCfg); render it + RunSystem on the venue (the SAME
 		// deploykit.RenderHostPackageCommand the host-engine deploy paths use, R3).
