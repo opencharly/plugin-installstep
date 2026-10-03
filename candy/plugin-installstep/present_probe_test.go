@@ -3,6 +3,7 @@ package installstep
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
@@ -78,6 +79,8 @@ func TestSystemPackagesTeardownDelta(t *testing.T) {
 // records the install command it was asked to run. No venue, no network.
 type fakeDeployExecutor struct {
 	captureStdout string
+	captureExit   int
+	captureErr    error
 	ranCapture    string
 	ranSystem     string
 }
@@ -107,7 +110,7 @@ func (f *fakeDeployExecutor) GetFile(context.Context, string, bool, spec.EmitOpt
 
 func (f *fakeDeployExecutor) RunCapture(_ context.Context, script string) (string, string, int, error) {
 	f.ranCapture = script
-	return f.captureStdout, "", 0, nil
+	return f.captureStdout, "", f.captureExit, f.captureErr
 }
 
 func (f *fakeDeployExecutor) RunInteractive(context.Context, string) (int, error) { return 0, nil }
@@ -123,20 +126,27 @@ func (f *fakeDeployExecutor) ResolveHome(context.Context, string) (string, error
 // subtracted (in the DECLARED form for the survivors) from the declared packages,
 // and an all-present probe records NO removal op at all.
 func TestExecDeployStepSystemPackagesDelta(t *testing.T) {
-	cfg := &spec.DistroConfig{Distro: map[string]*spec.ResolvedDistro{
+	declared := []string{"curl=8.0", "helm", "kubectl"}
+
+	// probeCfg is the steady state ONCE leg 3 supplies the four per-format queries.
+	probeCfg := &spec.DistroConfig{Distro: map[string]*spec.ResolvedDistro{
 		"test": {Format: map[string]*spec.Format{"pac": {PresentTemplate: "probe"}}},
 	}}
+	// emptyTmplCfg is the state EVERY format is in TODAY (leg 3 not yet merged): no
+	// present_template, so the probe cannot answer and Installed must stay nil.
+	emptyTmplCfg := &spec.DistroConfig{Distro: map[string]*spec.ResolvedDistro{
+		"test": {Format: map[string]*spec.Format{"pac": {}}},
+	}}
 
-	invoke := func(t *testing.T, probeStdout string) (spec.DeployReply, *fakeDeployExecutor) {
+	invoke := func(t *testing.T, cfg *spec.DistroConfig, fake *fakeDeployExecutor) (spec.DeployReply, *fakeDeployExecutor) {
 		t.Helper()
-		fake := &fakeDeployExecutor{captureStdout: probeStdout}
 		deps := &sdk.HostStepDeps{Exec: fake, DistroCfg: cfg, Opts: spec.EmitOpts{}}
 		ctx := sdk.ContextWithHostStepDeps(context.Background(), deps)
 
 		step := &spec.SystemPackagesStep{
 			Format:   "pac",
 			Phase:    spec.PhaseInstall,
-			Packages: []string{"curl=8.0", "helm", "kubectl"},
+			Packages: declared,
 		}
 		pj, err := json.Marshal(spec.StepToView(step))
 		if err != nil {
@@ -153,8 +163,25 @@ func TestExecDeployStepSystemPackagesDelta(t *testing.T) {
 		return dr, fake
 	}
 
+	// assertPriorDeclaredBehaviour pins the safe failure mode: when the probe cannot
+	// answer, Installed stays nil and Reverse() falls back to the FULL declared list
+	// in DECLARED form. It must never become an empty authoritative delta.
+	assertPriorDeclaredBehaviour := func(t *testing.T, dr spec.DeployReply) {
+		t.Helper()
+		if len(dr.ReverseOps) != 1 {
+			t.Fatalf("ReverseOps = %+v, want exactly one package-remove op", dr.ReverseOps)
+		}
+		op := dr.ReverseOps[0]
+		if op.Kind != spec.ReverseOpPackageRemove {
+			t.Fatalf("Kind = %q, want %q", op.Kind, spec.ReverseOpPackageRemove)
+		}
+		if !slices.Equal(op.Targets, declared) {
+			t.Fatalf("Targets = %v, want %v (Installed == nil must keep the FULL declared list in DECLARED form)", op.Targets, declared)
+		}
+	}
+
 	t.Run("already-present packages are subtracted, survivors keep declared form", func(t *testing.T) {
-		dr, fake := invoke(t, "curl\n")
+		dr, fake := invoke(t, probeCfg, &fakeDeployExecutor{captureStdout: "curl\n"})
 		if fake.ranCapture != "probe" {
 			t.Fatalf("RunCapture script = %q, want %q (the rendered present_template)", fake.ranCapture, "probe")
 		}
@@ -174,9 +201,24 @@ func TestExecDeployStepSystemPackagesDelta(t *testing.T) {
 	})
 
 	t.Run("every declared package already present records no removal at all", func(t *testing.T) {
-		dr, _ := invoke(t, "curl\nhelm\nkubectl\n")
+		dr, _ := invoke(t, probeCfg, &fakeDeployExecutor{captureStdout: "curl\nhelm\nkubectl\n"})
 		if len(dr.ReverseOps) != 0 {
 			t.Fatalf("ReverseOps = %+v, want none (a non-nil EMPTY Installed set is authoritative)", dr.ReverseOps)
 		}
+	})
+
+	t.Run("no present_template configured keeps the prior declared-list behaviour", func(t *testing.T) {
+		fake := &fakeDeployExecutor{captureStdout: "curl\n"}
+		dr, _ := invoke(t, emptyTmplCfg, fake)
+		assertPriorDeclaredBehaviour(t, dr)
+		if fake.ranCapture != "" {
+			t.Fatalf("RunCapture script = %q, want \"\" (no present_template means the venue must NOT be probed)", fake.ranCapture)
+		}
+	})
+
+	t.Run("a failed probe keeps the prior declared-list behaviour", func(t *testing.T) {
+		fake := &fakeDeployExecutor{captureStdout: "curl\n", captureErr: errors.New("boom")}
+		dr, _ := invoke(t, probeCfg, fake)
+		assertPriorDeclaredBehaviour(t, dr)
 	})
 }
