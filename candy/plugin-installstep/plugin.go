@@ -313,7 +313,7 @@ var genCache sync.Map // string (dir) -> *deploykit.Generator
 // cache miss: InvokeProvider("build","project") (the SAME generic envelope seam candy/plugin-box /
 // candy/plugin-fleet / candy/plugin-check already consume) → deploykit.NewRenderGeneratorFromProject
 // (the SAME shared construction source candy/plugin-build + candy/plugin-deploy-pod use, R3/DRY).
-func getGenerator(ctx context.Context, exec *sdk.Executor, dir string, devLocalPkg bool, extraCandyRefs []string) (*deploykit.Generator, error) {
+func getGenerator(ctx context.Context, exec *sdk.Executor, dir string, devLocalPkg bool, extraCandyRefs []spec.ExtraCandyRef) (*deploykit.Generator, error) {
 	if cached, ok := genCache.Load(dir); ok {
 		return cached.(*deploykit.Generator), nil
 	}
