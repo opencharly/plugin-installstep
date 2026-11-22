@@ -451,9 +451,9 @@ func emitSystemPackages(dg *deploykit.Generator, view spec.InstallStepView, env 
 // the candy from the resolved-project envelope, and render via the SAME kit.BuilderResolve (for an
 // EXTERNALIZED detection builder — pixi/npm/aur/cargo) or buildkit.RenderTemplate (a project-custom,
 // non-externalized inline builder) the box-build path + the former in-core render both used. A
-// missing box/BuilderConfig/candy yields the SAME informative skip-comment the former in-core
-// render produced (synthetic paths); an undefined builder or a template error is a LOUD failure
-// (never a silent empty bake, R4).
+// builder step exists because a candy NEEDS the builder, so a missing box, builder vocabulary or
+// candy is a LOUD failure like an undefined builder or a template error — never a skip-comment that
+// bakes an image without the build (opencharly/sdk#608).
 func emitBuilder(dg *deploykit.Generator, view spec.InstallStepView, env spec.BuildEnv) (string, error) {
 	step, err := deploykit.StepFromView(view)
 	if err != nil {
@@ -466,12 +466,10 @@ func emitBuilder(dg *deploykit.Generator, view spec.InstallStepView, env spec.Bu
 
 	img := dg.Boxes[env.Image]
 	if img == nil {
-		return fmt.Sprintf("# Builder: %s (layer=%s) — skipped, no Image context\n",
-			s.Builder, s.CandyName), nil
+		return "", fmt.Errorf("builder %q (candy %q): image %q is not in the resolved project", s.Builder, s.CandyName, env.Image)
 	}
 	if img.BuilderConfig == nil {
-		return fmt.Sprintf("# Builder: %s (layer=%s) — skipped, no BuilderConfig\n",
-			s.Builder, s.CandyName), nil
+		return "", fmt.Errorf("builder %q (candy %q): image %q has no builder vocabulary", s.Builder, s.CandyName, env.Image)
 	}
 	bDef, ok := img.BuilderConfig.Builder[s.Builder]
 	if !ok || bDef == nil {
@@ -480,8 +478,7 @@ func emitBuilder(dg *deploykit.Generator, view spec.InstallStepView, env spec.Bu
 
 	layer := candyByName(dg, s.CandyName)
 	if layer == nil {
-		return fmt.Sprintf("# Builder: %s (layer=%s) — layer not found in scan\n",
-			s.Builder, s.CandyName), nil
+		return "", fmt.Errorf("builder %q: candy %q is not in the resolved project", s.Builder, s.CandyName)
 	}
 
 	// Inline builders (cargo): render the in-candy RUN with the builder's inline context; no
@@ -510,25 +507,17 @@ func emitBuilder(dg *deploykit.Generator, view spec.InstallStepView, env spec.Bu
 		return fmt.Sprintf("USER %d\n", img.UID) + rendered, nil
 	}
 
-	// Multi-stage builders (pixi/npm/aur): emit the stage via the Generator's BuildStageContext
-	// helper. Only externalized (plugin) builders have a multi-stage; a custom builder must be an
-	// external_builder plugin.
-	builderRef := ""
-	if img.Builder != nil {
-		builderRef = img.Builder[s.Builder]
+	// Multi-stage builders (pixi/npm/mise/aur): the image (box build or pod overlay) hoists the
+	// builder's stage before its main FROM and copies its payload — the Generator's
+	// EmitBuilderStages/EmitBuilderArtifacts, the SAME path for both modes (D-IR-1,
+	// opencharly/sdk#608). The step itself installs only a declared PACKAGE output that the image's
+	// distro serves through local_pkg (aur's pac packages), through the one shared render. It never
+	// opens a stage: a stage rendered here landed mid-file, after the main FROM, so the builder
+	// stage became the image and nothing was copied back.
+	if s.Package == nil || s.LocalPkg == nil {
+		return "", nil
 	}
-	ctx := dg.BuildStageContext(layer, s.Builder, bDef, img, builderRef)
-	if ctx == nil {
-		return "", fmt.Errorf("buildStageContext returned nil for %s", s.Builder)
-	}
-	if !dg.ExternalizedBuilders[s.Builder] {
-		return "", fmt.Errorf("multi-stage builder %s is not an externalized plugin builder (a custom builder must be an external_builder plugin)", s.Builder)
-	}
-	reply, err := kit.BuilderResolve(s.Builder, deploykit.BuilderResolveInputFrom(layer.GetName(), s.Builder, bDef, ctx))
-	if err != nil {
-		return "", fmt.Errorf("multi-stage builder %s: %w", s.Builder, err)
-	}
-	return reply.Stage, nil
+	return deploykit.RenderBuilderPackageInstall(s.CandyName, s.Builder, s.Package, s.LocalPkg)
 }
 
 // emitLocalPkgInstall renders the LocalPkgInstall InstallStep's BUILD-context Containerfile
